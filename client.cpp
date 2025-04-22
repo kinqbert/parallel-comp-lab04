@@ -144,7 +144,7 @@ int main() {
     }
 
     while (true) {
-        this_thread::sleep_for(chrono::milliseconds(500));
+        this_thread::sleep_for(chrono::milliseconds(1000));
         uint8_t cmd = CMD_CHECK;
         send_all(sock, &cmd, 1);
 

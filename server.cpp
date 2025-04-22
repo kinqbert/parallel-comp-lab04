@@ -96,6 +96,8 @@ void handleClient(const SOCKET client) {
         if (!recvAll(client, &cmd, 1)) break;
 
         try {
+            cout << "[SERVER] Received command: " << hex << int(cmd) << " from client " << client << endl;
+
             if (cmd == CMD_INIT) {
                 uint32_t thrN, dataN;
                 if (!recvAll(client, &thrN, 4) || !recvAll(client, &dataN, 4))
@@ -138,6 +140,8 @@ void handleClient(const SOCKET client) {
                 }
 
                 thread([tPtr]() {
+                    cout << "[SERVER] [Client thread] Starting computation...\n";
+
                     size_t n = tPtr->data.size();
                     uint32_t m = tPtr->threadCount;
 
@@ -151,7 +155,7 @@ void handleClient(const SOCKET client) {
                     for (uint32_t i = 0; i < m; ++i) {
                         size_t begin = idx;
                         size_t end = begin + chunk + (i < extra ? 1 : 0);
-                        pool.emplace_back([=,&partial,tPtr]() {
+                        pool.emplace_back([=,&partial] {
                             int64_t sum = 0;
                             for (size_t k = begin; k < end; ++k)
                                 sum += tPtr->data[k];
@@ -163,7 +167,11 @@ void handleClient(const SOCKET client) {
 
                     int64_t total = 0;
                     for (auto v : partial) total += v;
+
                     tPtr->result = total;
+
+                    cout << "[SERVER] [Client thread] Computation finished. Result = " << total << "\n";
+
                     tPtr->ready = true;
                     tPtr->running = false;
                 }).detach();
@@ -191,6 +199,9 @@ void handleClient(const SOCKET client) {
 
                 uint8_t rsp = RSP_DONE;
                 int64_t netRes = hton64(static_cast<uint64_t>(t->result));
+
+                cout << "[SERVER] [Client " << client << "] Sent result: " << t->result << "\n";
+
                 sendAll(client, &rsp, 1);
                 sendAll(client, &netRes, 8);
             }
