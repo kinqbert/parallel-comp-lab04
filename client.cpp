@@ -7,6 +7,7 @@
 #include <vector>
 #include <thread>
 #include <chrono>
+#include <random>
 
 #define SERVER_PORT 8080
 
@@ -58,6 +59,21 @@ uint64_t hton64(uint64_t x) {
     return (static_cast<uint64_t>(hi) << 32) | lo;
 }
 
+vector<int32_t> generateRandomPayload(size_t size, int32_t minValue = 1, int32_t maxValue = 100) {
+    vector<int32_t> payload(size);
+
+    random_device rd;
+    mt19937 gen(rd());
+    uniform_int_distribution dist(minValue, maxValue);
+
+    for (auto& val : payload) {
+        val = dist(gen);
+    }
+
+    return payload;
+}
+
+
 int main() {
     WSADATA wsa;
     if (WSAStartup(MAKEWORD(2,2), &wsa) != 0) {
@@ -77,7 +93,7 @@ int main() {
     serverAddr.sin_port   = htons(SERVER_PORT);
     inet_pton(AF_INET, "127.0.0.1", &serverAddr.sin_addr);
 
-        const vector payload = { 5, 10, 15, 20, 25, 30 };
+    const vector payload = generateRandomPayload(100);
 
     if (connect(sock, reinterpret_cast<sockaddr *>(&serverAddr), sizeof(serverAddr)) == SOCKET_ERROR) {
         int err = WSAGetLastError();
