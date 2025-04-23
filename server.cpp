@@ -48,6 +48,16 @@ struct TaskInfo {
 unordered_map<SOCKET, TaskInfo> tasks;
 mutex tasksMutex;
 
+const char* getCommandName(const uint8_t cmd) {
+    switch (cmd) {
+        case CMD_INIT:   return "CMD_INIT";
+        case CMD_RUN:    return "CMD_RUN";
+        case CMD_CHECK:  return "CMD_CHECK";
+        case CMD_RESULT: return "CMD_RESULT";
+        default:         return "UNKNOWN_CMD";
+    }
+}
+
 uint64_t hton64(const uint64_t x) {
     const uint32_t hi = htonl(static_cast<uint32_t>(x >> 32));
     const uint32_t lo = htonl(static_cast<uint32_t>(x & 0xFFFFFFFF));
@@ -95,7 +105,8 @@ void handleClient(const SOCKET client) {
         if (!recvAll(client, &cmd, 1)) break;
 
         try {
-            cout << "[SERVER] Received command: " << hex << static_cast<int>(cmd) << " from client " << client << endl;
+            cout << "[SERVER] Received command: " << getCommandName(cmd)
+     << " from client " << client << endl;
 
             if (cmd == CMD_INIT) {
                 uint32_t thrN, dimN;
