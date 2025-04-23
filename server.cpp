@@ -88,7 +88,6 @@ void handleClient(const SOCKET client) {
         tasks.emplace(std::piecewise_construct,
                       std::forward_as_tuple(client),
                       std::forward_as_tuple());
-
     }
 
     while (true) {
@@ -164,6 +163,8 @@ void handleClient(const SOCKET client) {
                     }
                     for (auto& th : pool) th.join();
 
+                    cout << "[SERVER] Processing finished." << endl;
+
                     tPtr->ready   = true;
                     tPtr->running = false;
                 }).detach();
@@ -195,7 +196,7 @@ void handleClient(const SOCKET client) {
                 uint32_t netN = htonl(t->N);
                 sendAll(client,&netN,4);
 
-                for(int32_t v : t->mtx){
+                for(const int32_t v : t->mtx){
                     int32_t tmp = htonl(v);
                     sendAll(client,&tmp,4);
                 }
