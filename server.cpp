@@ -38,11 +38,11 @@ LONG WINAPI CrashHandler(EXCEPTION_POINTERS* ExceptionInfo) {
 }
 
 struct TaskInfo {
-    vector<int32_t> data;
+    uint32_t N = 0;
+    vector<int32_t> mtx;
     uint32_t threadCount = 0;
     atomic<bool> running{false};
-    atomic<bool> ready{false};
-    int64_t result = 0;
+    atomic<bool> ready  {false};
 };
 
 unordered_map<SOCKET, TaskInfo> tasks;
@@ -55,18 +55,18 @@ uint64_t hton64(const uint64_t x) {
 }
 
 bool recvAll(SOCKET s, void* buf, int len) {
-    char* p = (char*)buf;
+    auto p = static_cast<char *>(buf);
     while (len > 0) {
-        int r = recv(s, p, len, 0);
+        const int r = recv(s, p, len, 0);
         if (r <= 0) return false;
         p += r; len -= r;
     }
     return true;
 }
 bool sendAll(SOCKET s, const void* buf, int len) {
-    const char* p = (const char*)buf;
+    auto p = static_cast<const char *>(buf);
     while (len > 0) {
-        int r = send(s, p, len, 0);
+        const int r = send(s, p, len, 0);
         if (r <= 0) return false;
         p += r; len -= r;
     }
@@ -96,83 +96,75 @@ void handleClient(const SOCKET client) {
         if (!recvAll(client, &cmd, 1)) break;
 
         try {
-            cout << "[SERVER] Received command: " << hex << int(cmd) << " from client " << client << endl;
+            cout << "[SERVER] Received command: " << hex << static_cast<int>(cmd) << " from client " << client << endl;
 
             if (cmd == CMD_INIT) {
-                uint32_t thrN, dataN;
-                if (!recvAll(client, &thrN, 4) || !recvAll(client, &dataN, 4))
+                uint32_t thrN, dimN;
+                if(!recvAll(client,&thrN,4) || !recvAll(client,&dimN,4))
                     throw runtime_error("Bad INIT header");
-                thrN    = ntohl(thrN);
-                dataN   = ntohl(dataN);
+                thrN = ntohl(thrN);
+                dimN = ntohl(dimN);
 
-                vector<int32_t> arr(dataN);
-
-                if (!recvAll(client, arr.data(), dataN * 4))
+                vector<int32_t> buf(dimN*dimN);
+                if(!recvAll(client,buf.data(),buf.size()*4))
                     throw runtime_error("Bad INIT data");
-
-                for (auto& x : arr) x = ntohl(static_cast<uint32_t>(x));
+                for(auto& v:buf) v = ntohl(static_cast<uint32_t>(v));
 
                 {
-                    lock_guard lock(tasksMutex);
+                    lock_guard g(tasksMutex);
                     auto& t = tasks[client];
-                    t.data = move(arr);
+                    t.N = dimN;
+                    t.mtx.swap(buf);
                     t.threadCount = thrN;
-                    t.running = false;
-                    t.ready = false;
+                    t.running = t.ready = false;
                 }
-
                 uint8_t rsp = RSP_OK;
-                sendAll(client, &rsp, 1);
+                sendAll(client,&rsp,1);
             }
             else if (cmd == CMD_RUN) {
                 TaskInfo* tPtr = nullptr;
                 {
                     lock_guard lock(tasksMutex);
                     auto& t = tasks[client];
-                    if (t.data.empty() || t.threadCount == 0)
+
+                    if (t.mtx.empty() || t.threadCount == 0)
                         throw runtime_error("No INIT");
+
                     if (t.running)
                         throw runtime_error("Already RUN");
+
                     t.running = true;
-                    t.ready = false;
-                    t.result = 0;
+                    t.ready   = false;
+
                     tPtr = &t;
                 }
 
-                thread([tPtr]() {
-                    cout << "[SERVER] [Client thread] Starting computation...\n";
+                thread([tPtr]{
+                    const uint32_t N     = tPtr->N;
+                    const uint32_t P     = tPtr->threadCount;
+                    const uint32_t rows  = N/2;
+                    const uint32_t chunk = rows / P;
+                    const uint32_t extra = rows % P;
 
-                    size_t n = tPtr->data.size();
-                    uint32_t m = tPtr->threadCount;
-
-                    std::this_thread::sleep_for(std::chrono::seconds(3));
+                    auto work = [tPtr,N](uint32_t rBegin,uint32_t rEnd){
+                        for (uint32_t i = rBegin; i < rEnd; ++i) {
+                            uint32_t mirror   = N - 1 - i;
+                            int32_t* topRow   = tPtr->mtx.data() + i      * N;
+                            int32_t* botRow   = tPtr->mtx.data() + mirror * N;
+                            memcpy(botRow, topRow, N * sizeof(int32_t));
+                        }
+                    };
 
                     vector<thread> pool;
-                    vector<int64_t> partial(m, 0);
-                    size_t chunk = n / m, extra = n % m;
-                    size_t idx = 0;
-
-                    for (uint32_t i = 0; i < m; ++i) {
-                        size_t begin = idx;
-                        size_t end = begin + chunk + (i < extra ? 1 : 0);
-                        pool.emplace_back([=,&partial] {
-                            int64_t sum = 0;
-                            for (size_t k = begin; k < end; ++k)
-                                sum += tPtr->data[k];
-                            partial[i] = sum;
-                        });
-                        idx = end;
+                    uint32_t r0 = 0;
+                    for (uint32_t p = 0; p < P; ++p) {
+                        uint32_t r1 = r0 + chunk + (p < extra ? 1 : 0);
+                        pool.emplace_back(work, r0, r1);
+                        r0 = r1;
                     }
                     for (auto& th : pool) th.join();
 
-                    int64_t total = 0;
-                    for (auto v : partial) total += v;
-
-                    tPtr->result = total;
-
-                    cout << "[SERVER] [Client thread] Computation finished. Result = " << total << "\n";
-
-                    tPtr->ready = true;
+                    tPtr->ready   = true;
                     tPtr->running = false;
                 }).detach();
 
@@ -198,12 +190,16 @@ void handleClient(const SOCKET client) {
                     throw runtime_error("Not ready");
 
                 uint8_t rsp = RSP_DONE;
-                int64_t netRes = hton64(static_cast<uint64_t>(t->result));
+                sendAll(client,&rsp,1);
 
-                cout << "[SERVER] [Client " << client << "] Sent result: " << t->result << "\n";
+                uint32_t netN = htonl(t->N);
+                sendAll(client,&netN,4);
 
-                sendAll(client, &rsp, 1);
-                sendAll(client, &netRes, 8);
+                for(int32_t v : t->mtx){
+                    int32_t tmp = htonl(v);
+                    sendAll(client,&tmp,4);
+                }
+
             }
             else {
                 throw runtime_error("Unknown cmd");

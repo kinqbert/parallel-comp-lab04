@@ -26,187 +26,151 @@ enum : uint8_t {
     RSP_DONE  = 0x13
 };
 
-bool recv_all(const SOCKET s, void* buf, int bytes) {
-    auto ptr = static_cast<char*>(buf);
-    while (bytes > 0) {
-        const int r = recv(s, ptr, bytes, 0);
-        if (r <= 0) return false;
-        ptr += r;
-        bytes -= r;
+bool sendAll(SOCKET s,const void* buf,int len){
+    auto p = static_cast<const char*>(buf);
+    while(len){
+        const int n = send(s,p,len,0);
+        if(n<=0) return false;
+        p+=n; len-=n;
+    }
+    return true;
+}
+bool recvAll(SOCKET s,void* buf,int len){
+    auto p = static_cast<char*>(buf);
+    while(len){
+        const int n = recv(s,p,len,0);
+        if(n<=0) return false;
+        p+=n; len-=n;
     }
     return true;
 }
 
-bool send_all(SOCKET s, const void* buf, int bytes) {
-    const char* ptr = static_cast<const char*>(buf);
-    while (bytes > 0) {
-        int sent = send(s, ptr, bytes, 0);
-        if (sent <= 0) return false;
-        ptr += sent;
-        bytes -= sent;
-    }
-    return true;
+uint64_t ntoh64(const uint64_t x) {
+    const uint32_t hi = ntohl(static_cast<uint32_t>(x >> 32));
+    const uint32_t lo = ntohl(static_cast<uint32_t>(x & 0xFFFFFFFF));
+    return (static_cast<uint64_t>(hi) << 32) | lo;
 }
-
-uint64_t ntoh64(uint64_t x) {
-    uint32_t hi = ntohl(uint32_t(x >> 32));
-    uint32_t lo = ntohl(uint32_t(x & 0xFFFFFFFF));
-    return (uint64_t(hi) << 32) | lo;
-}
-uint64_t hton64(uint64_t x) {
+uint64_t hton64(const uint64_t x) {
     const uint32_t hi = htonl(static_cast<uint32_t>(x >> 32));
     const uint32_t lo = htonl(static_cast<uint32_t>(x & 0xFFFFFFFF));
     return (static_cast<uint64_t>(hi) << 32) | lo;
 }
 
-vector<int32_t> generateRandomPayload(size_t size, int32_t minValue = 1, int32_t maxValue = 100) {
-    vector<int32_t> payload(size);
-
-    random_device rd;
-    mt19937 gen(rd());
-    uniform_int_distribution dist(minValue, maxValue);
-
-    for (auto& val : payload) {
-        val = dist(gen);
+vector<int32_t> makeMatrix(const uint32_t N, const int32_t lo=1, const int32_t hi=100){
+    vector<int32_t> m(N*N);
+    random_device rd; mt19937 gen(rd());
+    uniform_int_distribution dist(lo,hi);
+    for(auto& v:m) v = dist(gen);
+    return m;
+}
+void mirrorHorizontally(vector<int32_t>& m, const uint32_t N){
+    for(uint32_t i=0;i<N/2;++i){
+        const uint32_t mir = N-1-i;
+        const int32_t* top = m.data()+i *N;
+        int32_t* bot = m.data()+mir*N;
+        memcpy(bot,top,N*sizeof(int32_t));
     }
-
-    return payload;
 }
 
+void printMatrix(const vector<int32_t>& m, uint32_t N, const string& title){
+    cout << title << " (" << N << "x" << N << "):\n";
+    for(uint32_t i=0;i<N;++i){
+        for(uint32_t j=0;j<N;++j) cout << setw(4) << m[i*N+j] << ' ';
+        cout << '\n';
+    }
+}
 
-int main() {
-    WSADATA wsa;
-    if (WSAStartup(MAKEWORD(2,2), &wsa) != 0) {
-        cerr << "WSAStartup failed\n";
-        return 1;
+int main(){
+    WSADATA ws;
+    if(WSAStartup(MAKEWORD(2,2),&ws)!=0){
+        cerr<<"WSAStartup failed\n"; return 1;
+    }
+    SOCKET sock = socket(AF_INET,SOCK_STREAM,0);
+    if(sock==INVALID_SOCKET){ cerr<<"socket() error\n"; return 1; }
+
+    sockaddr_in srv{};
+    srv.sin_family = AF_INET;
+    srv.sin_port   = htons(SERVER_PORT);
+    inet_pton(AF_INET,"127.0.0.1",&srv.sin_addr);
+
+    if(connect(sock,reinterpret_cast<sockaddr*>(&srv),sizeof(srv))==SOCKET_ERROR){
+        cerr<<"connect() failed : "<<WSAGetLastError()<<"\n";
+        closesocket(sock); WSACleanup(); return 1;
     }
 
-    const SOCKET sock = socket(AF_INET, SOCK_STREAM, 0);
-    if (sock == INVALID_SOCKET) {
-        cerr << "socket() error\n";
-        WSACleanup();
-        return 1;
-    }
+    const uint32_t N = 5;
+    const uint32_t THREADS = 4;
+    const auto matrix = makeMatrix(N);
 
-    sockaddr_in serverAddr{};
-    serverAddr.sin_family = AF_INET;
-    serverAddr.sin_port   = htons(SERVER_PORT);
-    inet_pton(AF_INET, "127.0.0.1", &serverAddr.sin_addr);
-
-    const vector payload = generateRandomPayload(100);
-
-    if (connect(sock, reinterpret_cast<sockaddr *>(&serverAddr), sizeof(serverAddr)) == SOCKET_ERROR) {
-        int err = WSAGetLastError();
-        cerr << "connect() failed: " << err << "\n";
-        closesocket(sock);
-        WSACleanup();
-        return 1;
-    }
-
+    if(N<=5) printMatrix(matrix,N,"Original");
 
     {
-        const uint32_t threadCount = 4;
         const uint8_t cmd = CMD_INIT;
-        const uint32_t thr_n = htonl(threadCount);
-        const uint32_t len_n = htonl(static_cast<uint32_t>(payload.size()));
+        const uint32_t thr_net = htonl(THREADS);
+        const uint32_t N_net = htonl(N);
 
-        send_all(sock, &cmd, 1);
-        send_all(sock, &thr_n, 4);
-        send_all(sock, &len_n, 4);
+        sendAll(sock,&cmd,1);
+        sendAll(sock,&thr_net,4);
+        sendAll(sock,&N_net,4);
 
-        for (const int32_t v : payload) {
+        for(const int32_t v:matrix){
             int32_t tmp = htonl(v);
-            send_all(sock, &tmp, 4);
+            sendAll(sock,&tmp,4);
         }
-
-        uint8_t resp = 0;
-        if (!recv_all(sock, &resp, 1) || resp != RSP_OK) {
-            cerr << "INIT failed or server error\n";
-            closesocket(sock);
-            WSACleanup();
-            return 1;
+        uint8_t rsp;
+        if(!recvAll(sock,&rsp,1)||rsp!=RSP_OK){
+            cerr<<"INIT error\n"; return 1;
         }
-        cout << "[CLIENT] INIT OK\n";
+        cout<<"[CLIENT] INIT OK\n";
     }
 
     {
-        uint8_t cmd = CMD_RUN;
-        send_all(sock, &cmd, 1);
-
-        uint8_t resp = 0;
-        if (!recv_all(sock, &resp, 1) || resp != RSP_OK) {
-            cerr << "RUN failed or server error\n";
-            closesocket(sock);
-            WSACleanup();
-            return 1;
+        const uint8_t cmd = CMD_RUN;
+        sendAll(sock,&cmd,1);
+        uint8_t rsp;
+        if(!recvAll(sock,&rsp,1)||rsp!=RSP_OK){
+            cerr<<"RUN error\n"; return 1;
         }
-        cout << "[CLIENT] RUN started\n";
+        cout<<"[CLIENT] RUN accepted\n";
     }
 
-    while (true) {
-        this_thread::sleep_for(chrono::milliseconds(1000));
-        uint8_t cmd = CMD_CHECK;
-        send_all(sock, &cmd, 1);
-
-        uint8_t resp = 0;
-        if (!recv_all(sock, &resp, 1)) {
-            cerr << "CHECK recv error\n";
-            closesocket(sock);
-            WSACleanup();
-            return 1;
-        }
-
-        if (resp == RSP_BUSY) {
-            cout << "[CLIENT] Server is still working...\n";
-        }
-        else if (resp == RSP_DONE) {
-            cout << "[CLIENT] Server completed work\n";
-            break;
-        }
-        else {
-            cerr << "[CLIENT] Unexpected CHECK response: " << int(resp) << "\n";
-            closesocket(sock);
-            WSACleanup();
-            return 1;
-        }
+    while(true){
+        this_thread::sleep_for(chrono::milliseconds(500));
+        uint8_t cmd=CMD_CHECK; sendAll(sock,&cmd,1);
+        uint8_t rsp; if(!recvAll(sock,&rsp,1)){ cerr<<"CHECK error\n"; return 1; }
+        if(rsp==RSP_BUSY){ cout<<"  …working\n"; continue; }
+        if(rsp==RSP_DONE){ cout<<"[CLIENT] computation finished\n"; break; }
+        cerr<<"Unexpected CHECK response\n"; return 1;
     }
 
+    vector<int32_t> mirrored;
+    uint32_t outN=0;
     {
-        uint8_t cmd = CMD_RESULT;
-        send_all(sock, &cmd, 1);
+        const uint8_t cmd=CMD_RESULT; sendAll(sock,&cmd,1);
 
-        uint8_t resp = 0;
-        if (!recv_all(sock, &resp, 1) || resp != RSP_DONE) {
-            cerr << "RESULT failed or server error\n";
-            closesocket(sock);
-            WSACleanup();
-            return 1;
+        uint8_t rsp; if(!recvAll(sock,&rsp,1)||rsp!=RSP_DONE){
+            cerr<<"RESULT error\n"; return 1;
         }
-
-        uint64_t netRes = 0;
-        if (!recv_all(sock, &netRes, 8)) {
-            cerr << "Failed to receive result value\n";
-            closesocket(sock);
-            WSACleanup();
-            return 1;
+        recvAll(sock,&outN,4); outN = ntohl(outN);
+        if(outN!=N){ cerr<<"Server sent matrix of different size\n"; return 1; }
+        mirrored.resize(N*N);
+        for(auto& v:mirrored){
+            int32_t tmp; recvAll(sock,&tmp,4);
+            v = ntohl(tmp);
         }
-        const auto result = static_cast<int64_t>(ntoh64(netRes));
-        cout << "[CLIENT] Computation result = " << result << "\n";
-
-
-        int64_t expected = 0;
-        for (int32_t val : payload)
-            expected += val;
-
-        if (result == expected) {
-            cout << "[CLIENT] Result is correct!" << endl;
-        } else {
-            cerr << "[CLIENT] Mismatch! Expected " << expected << " but got " << result << endl;
-        }
-
     }
 
-    closesocket(sock);
-    WSACleanup();
-    return 0;
+    auto expected = matrix; mirrorHorizontally(expected,N);
+
+    const bool ok = (mirrored==expected);
+
+    if (N<=5) {
+        printMatrix(expected ,N,"Expected (mirrored locally)");
+        printMatrix(mirrored,N,"Received from server");
+    }
+
+    cout<<(ok? "[CLIENT] Mirror OK" : "[CLIENT] Mirror mismatch")<<endl;
+
+    closesocket(sock); WSACleanup(); return 0;
 }
+
