@@ -150,16 +150,16 @@ int main() {
         this_thread::sleep_for(chrono::milliseconds(500));
         uint8_t cmd = CMD_CHECK;
         sendAll(sock, &cmd, 1);
-        uint8_t rsp;
-        if (!recvAll(sock, &rsp, 1)) {
+        uint8_t rspCheck;
+        if (!recvAll(sock, &rspCheck, 1)) {
             cerr << "CHECK error\n";
             return 1;
         }
-        if (rsp == RSP_BUSY) {
+        if (rspCheck == RSP_BUSY) {
             cout << "  …working\n";
             continue;
         }
-        if (rsp == RSP_DONE) {
+        if (rspCheck == RSP_DONE) {
             cout << "[CLIENT] computation finished\n";
             break;
         }
@@ -168,27 +168,32 @@ int main() {
     }
 
     vector<int32_t> mirrored;
-    uint32_t outN = 0; {
-        const uint8_t cmd = CMD_RESULT;
-        sendAll(sock, &cmd, 1);
+    uint32_t outN = 0;
 
-        uint8_t rsp;
-        if (!recvAll(sock, &rsp, 1) || rsp != RSP_DONE) {
-            cerr << "RESULT error\n";
-            return 1;
-        }
-        recvAll(sock, &outN, 4);
-        outN = ntohl(outN);
-        if (outN != N) {
-            cerr << "Server sent matrix of different size\n";
-            return 1;
-        }
-        mirrored.resize(N * N);
-        for (auto &v: mirrored) {
-            int32_t tmp;
-            recvAll(sock, &tmp, 4);
-            v = ntohl(tmp);
-        }
+    const uint8_t cmd = CMD_RESULT;
+    sendAll(sock, &cmd, 1);
+
+    uint8_t rspResult;
+
+    if (!recvAll(sock, &rspResult, 1) || rspResult != RSP_DONE) {
+        cerr << "RESULT error\n";
+        return 1;
+    }
+
+    recvAll(sock, &outN, 4);
+    outN = ntohl(outN);
+
+    if (outN != N) {
+        cerr << "Server sent matrix of different size\n";
+        return 1;
+    }
+
+    mirrored.resize(N * N);
+
+    for (auto &v : mirrored) {
+        int32_t tmp;
+        recvAll(sock, &tmp, 4);
+        v = ntohl(tmp);
     }
 
     auto expected = matrix;
