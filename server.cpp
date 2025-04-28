@@ -59,12 +59,6 @@ const char *getCommandName(const uint8_t cmd) {
     }
 }
 
-uint64_t hton64(const uint64_t x) {
-    const uint32_t hi = htonl(static_cast<uint32_t>(x >> 32));
-    const uint32_t lo = htonl(static_cast<uint32_t>(x & 0xFFFFFFFF));
-    return (static_cast<uint64_t>(hi) << 32) | lo;
-}
-
 bool recvAll(SOCKET socket, void *buf, int len) {
     auto p = static_cast<char *>(buf);
     while (len > 0) {
