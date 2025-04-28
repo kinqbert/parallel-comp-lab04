@@ -115,35 +115,36 @@ int main() {
     const uint32_t THREADS = 4;
     const auto matrix = makeMatrix(N);
 
-    if (N <= 5) printMatrix(matrix, N, "Original"); {
-        const uint8_t cmd = CMD_INIT;
-        const uint32_t thr_net = htonl(THREADS);
-        const uint32_t N_net = htonl(N);
-
-        sendAll(sock, &cmd, 1);
-        sendAll(sock, &thr_net, 4);
-        sendAll(sock, &N_net, 4);
-
-        for (const int32_t v: matrix) {
-            int32_t tmp = htonl(v);
-            sendAll(sock, &tmp, 4);
-        }
-        uint8_t rsp;
-        if (!recvAll(sock, &rsp, 1) || rsp != RSP_OK) {
-            cerr << "INIT error\n";
-            return 1;
-        }
-        cout << "[CLIENT] INIT OK\n";
-    } {
-        const uint8_t cmd = CMD_RUN;
-        sendAll(sock, &cmd, 1);
-        uint8_t rsp;
-        if (!recvAll(sock, &rsp, 1) || rsp != RSP_OK) {
-            cerr << "RUN error\n";
-            return 1;
-        }
-        cout << "[CLIENT] RUN accepted\n";
+    if (N <= 5) {
+        printMatrix(matrix, N, "Original");
     }
+
+    const uint8_t cmdInit = CMD_INIT;
+    const uint32_t thr_net = htonl(THREADS);
+    const uint32_t N_net = htonl(N);
+
+    sendAll(sock, &cmdInit, 1);
+    sendAll(sock, &thr_net, 4);
+    sendAll(sock, &N_net, 4);
+
+    for (const int32_t v : matrix) {
+        int32_t tmp = htonl(v);
+        sendAll(sock, &tmp, 4);
+    }
+    uint8_t rsp;
+    if (!recvAll(sock, &rsp, 1) || rsp != RSP_OK) {
+        cerr << "INIT error\n";
+        return 1;
+    }
+    cout << "[CLIENT] INIT OK\n";
+
+    const uint8_t cmdRun = CMD_RUN;
+    sendAll(sock, &cmdRun, 1);
+    if (!recvAll(sock, &rsp, 1) || rsp != RSP_OK) {
+        cerr << "RUN error\n";
+        return 1;
+    }
+    cout << "[CLIENT] RUN accepted\n";
 
     while (true) {
         this_thread::sleep_for(chrono::milliseconds(500));
