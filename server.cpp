@@ -220,10 +220,13 @@ void handleClient(const SOCKET client) {
                 uint32_t dimensionNet = htonl(task->dimension);
                 sendAll(client, &dimensionNet, 4);
 
-                for (const int32_t v: task->matrix) {
-                    int32_t tmp = htonl(v);
-                    sendAll(client, &tmp, 4);
+                vector<int32_t> matrixNet(task->matrix.size());
+
+                for (size_t i = 0; i < task->matrix.size(); ++i) {
+                    matrixNet[i] = htonl(task->matrix[i]);
                 }
+
+                sendAll(client, matrixNet.data(), matrixNet.size() * sizeof(int32_t));
             } else {
                 throw runtime_error("Unknown cmd");
             }
