@@ -13,21 +13,17 @@
 
 using namespace std;
 
-enum : uint8_t {
-    CMD_INIT = 0x01,
-    CMD_RUN = 0x02,
-    CMD_CHECK = 0x03,
-    CMD_RESULT = 0x04
-};
+constexpr char INIT[]   = "INIT";
+constexpr char RUN[]    = "RUN";
+constexpr char CHECK[]  = "CHECK";
+constexpr char RESULT[] = "RESULT";
 
-enum : uint8_t {
-    RSP_OK = 0x10,
-    RSP_ERR = 0x11,
-    RSP_BUSY = 0x12,
-    RSP_DONE = 0x13
-};
+constexpr char OK[]   = "OK";
+constexpr char BUSY[] = "BUSY";
+constexpr char DONE[] = "DONE";
+constexpr char ERR[]  = "ERR";
 
-bool sendAll(SOCKET socket, const void *buf, int len) {
+bool sendData(const SOCKET socket, const void *buf, int len) {
     auto p = static_cast<const char *>(buf);
     while (len) {
         const int n = send(socket, p, len, 0);
@@ -38,7 +34,7 @@ bool sendAll(SOCKET socket, const void *buf, int len) {
     return true;
 }
 
-bool recvAll(SOCKET socket, void *buf, int len) {
+bool recvData(const SOCKET socket, void *buf, int len) {
     auto p = static_cast<char *>(buf);
     while (len) {
         const int n = recv(socket, p, len, 0);
@@ -47,6 +43,19 @@ bool recvAll(SOCKET socket, void *buf, int len) {
         len -= n;
     }
     return true;
+}
+
+bool sendString(const SOCKET s, const std::string& msg) {
+    const uint32_t n = htonl(static_cast<uint32_t>(msg.size()));
+    return sendData(s, &n, 4) && sendData(s, msg.data(), msg.size());
+}
+
+bool recvString(const SOCKET s, std::string& out) {
+    uint32_t nNet;
+    if (!recvData(s, &nNet, 4)) return false;
+    const uint32_t n = ntohl(nNet);
+    out.resize(n);
+    return recvData(s, out.data(), n);
 }
 
 vector<int32_t> makeMatrix(const uint32_t N, const int32_t lo = 1, const int32_t hi = 100) {
@@ -102,6 +111,10 @@ int main() {
         return 1;
     }
 
+    std::string greet;
+    recvString(sock, greet);
+    std::cout << "[CLIENT] Server says: " << greet << '\n';
+
     const int dimension = 10;
     const int THREADS = 2;
     const auto matrix = makeMatrix(dimension);
@@ -112,15 +125,15 @@ int main() {
         printMatrix(matrix, dimension, "Original");
     }
 
-    const uint8_t cmdInit = CMD_INIT;
+    const string cmdInit = "INIT";
     const int threadsNet = htonl(THREADS);
     const int dimensionNet = htonl(dimension);
 
     cout << "[CLIENT] SENDING DATA\n";
 
-    sendAll(sock, &cmdInit, 1);
-    sendAll(sock, &threadsNet, 4);
-    sendAll(sock, &dimensionNet, 4);
+    sendString(sock, "INIT");
+    sendData(sock, &threadsNet, 4);
+    sendData(sock, &dimensionNet, 4);
 
     vector<int32_t> matrixNet(matrix.size());
 
@@ -128,18 +141,18 @@ int main() {
         matrixNet[i] = htonl(matrix[i]);
     }
 
-    sendAll(sock, matrixNet.data(), matrixNet.size() * sizeof(int32_t));
+    sendData(sock, matrixNet.data(), matrixNet.size() * sizeof(int32_t));
 
-    uint8_t rsp;
-    if (!recvAll(sock, &rsp, 1) || rsp != RSP_OK) {
-        cerr << "INIT error\n";
+    string rsp;
+    if (!recvString(sock, rsp) || rsp != OK) {
+        cerr << "INIT error: " << rsp << '\n';
         return 1;
     }
     cout << "[CLIENT] INIT OK\n";
 
-    const uint8_t cmdRun = CMD_RUN;
-    sendAll(sock, &cmdRun, 1);
-    if (!recvAll(sock, &rsp, 1) || rsp != RSP_OK) {
+    const string cmdRun = RUN;
+    sendString(sock, cmdRun);
+    if (!recvString(sock, rsp) || rsp != OK) {
         cerr << "RUN error\n";
         return 1;
     }
@@ -147,39 +160,45 @@ int main() {
 
     while (true) {
         this_thread::sleep_for(chrono::milliseconds(500));
-        uint8_t cmd = CMD_CHECK;
-        sendAll(sock, &cmd, 1);
-        uint8_t rspCheck;
-        if (!recvAll(sock, &rspCheck, 1)) {
+
+        sendString(sock, CHECK);
+
+        string rspCheck;
+        if (!recvString(sock, rspCheck)) {
             cerr << "CHECK error\n";
             return 1;
         }
-        if (rspCheck == RSP_BUSY) {
+
+        if (rspCheck == BUSY) {
             cout << "[CLIENT] Server still working...\n";
             continue;
         }
-        if (rspCheck == RSP_DONE) {
+        if (rspCheck == DONE) {
             cout << "[CLIENT] Computation finished\n";
             break;
         }
-        cerr << "Unexpected CHECK response\n";
+
+        cerr << "Unexpected CHECK response: " << rspCheck << "\n";
         return 1;
     }
 
     vector<int32_t> mirrored;
     uint32_t outN = 0;
 
-    const uint8_t cmd = CMD_RESULT;
-    sendAll(sock, &cmd, 1);
+    string rspResult;
+    sendString(sock, "RESULT");
 
-    uint8_t rspResult;
-
-    if (!recvAll(sock, &rspResult, 1) || rspResult != RSP_DONE) {
-        cerr << "RESULT error\n";
+    if (!recvString(sock, rspResult)) {
+        cerr << "RESULT error (no response)\n";
         return 1;
     }
 
-    recvAll(sock, &outN, 4);
+    if (rspResult != DONE) {
+        cerr << "RESULT error: " << rspResult << "\n";
+        return 1;
+    }
+
+    recvData(sock, &outN, 4);
     outN = ntohl(outN);
 
     if (outN != dimension) {
@@ -191,7 +210,7 @@ int main() {
 
     for (auto &v : mirrored) {
         int32_t tmp;
-        recvAll(sock, &tmp, 4);
+        recvData(sock, &tmp, 4);
         v = ntohl(tmp);
     }
 

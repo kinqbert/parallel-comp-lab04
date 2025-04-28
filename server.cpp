@@ -14,20 +14,15 @@
 
 using namespace std;
 
-enum : uint8_t {
-    CMD_INIT = 0x01,
-    CMD_RUN = 0x02,
-    CMD_CHECK = 0x03,
-    CMD_RESULT = 0x04
-};
+constexpr char INIT[]   = "INIT";
+constexpr char RUN[]    = "RUN";
+constexpr char CHECK[]  = "CHECK";
+constexpr char RESULT[] = "RESULT";
 
-enum : uint8_t {
-    RSP_OK = 0x10,
-    RSP_ERR = 0x11,
-    RSP_BUSY = 0x12,
-    RSP_DONE = 0x13
-};
-
+constexpr char OK[]   = "OK";
+constexpr char BUSY[] = "BUSY";
+constexpr char DONE[] = "DONE";
+constexpr char ERR[]  = "ERR";
 
 LONG WINAPI CrashHandler(EXCEPTION_POINTERS *ExceptionInfo) {
     cerr << "[CRASH] Unhandled exception occurred! Code: "
@@ -49,17 +44,8 @@ struct TaskInfo {
 unordered_map<SOCKET, TaskInfo> tasks;
 mutex tasksMutex;
 
-const char *getCommandName(const uint8_t cmd) {
-    switch (cmd) {
-        case CMD_INIT: return "CMD_INIT";
-        case CMD_RUN: return "CMD_RUN";
-        case CMD_CHECK: return "CMD_CHECK";
-        case CMD_RESULT: return "CMD_RESULT";
-        default: return "UNKNOWN_CMD";
-    }
-}
 
-bool recvAll(SOCKET socket, void *buf, int len) {
+bool recvData(const SOCKET socket, void *buf, int len) {
     auto p = static_cast<char *>(buf);
     while (len) {
         const int n = recv(socket, p, len, 0);
@@ -70,7 +56,7 @@ bool recvAll(SOCKET socket, void *buf, int len) {
     return true;
 }
 
-bool sendAll(SOCKET socket, const void *buf, int len) {
+bool sendData(const SOCKET socket, const void *buf, int len) {
     auto p = static_cast<const char *>(buf);
     while (len) {
         const int n = send(socket, p, len, 0);
@@ -79,6 +65,19 @@ bool sendAll(SOCKET socket, const void *buf, int len) {
         len -= n;
     }
     return true;
+}
+
+bool sendString(const SOCKET s, const std::string& msg) {
+    const uint32_t n = htonl(static_cast<uint32_t>(msg.size()));
+    return sendData(s, &n, 4) && sendData(s, msg.data(), msg.size());
+}
+
+bool recvString(const SOCKET s, std::string& out) {
+    uint32_t nNet;
+    if (!recvData(s, &nNet, 4)) return false;
+    const uint32_t n = ntohl(nNet);
+    out.resize(n);
+    return recvData(s, out.data(), n);
 }
 
 void handleClient(const SOCKET client) {
@@ -90,17 +89,17 @@ void handleClient(const SOCKET client) {
                       forward_as_tuple());
     }
 
+    sendString(client, "Welcome to the server!");
+
     while (true) {
-        uint8_t cmd;
-        if (!recvAll(client, &cmd, 1)) break;
+        std::string cmd;
+        if (!recvString(client, cmd)) break;
+        std::cout << "[SERVER] Received command: " << cmd << " from client " << client << '\n';
 
         try {
-            cout << "[SERVER] Received command: " << getCommandName(cmd)
-                    << " from client " << client << endl;
-
-            if (cmd == CMD_INIT) {
+            if (cmd == INIT) {
                 uint32_t threads, dimension;
-                if (!recvAll(client, &threads, 4) || !recvAll(client, &dimension, 4)) {
+                if (!recvData(client, &threads, 4) || !recvData(client, &dimension, 4)) {
                     throw runtime_error("Bad INIT header");
                 }
 
@@ -109,7 +108,7 @@ void handleClient(const SOCKET client) {
 
                 vector<int32_t> matrix(dimension * dimension);
 
-                if (!recvAll(client, matrix.data(), matrix.size() * 4)) {
+                if (!recvData(client, matrix.data(), matrix.size() * 4)) {
                     throw runtime_error("Bad INIT data");
                 }
 
@@ -126,9 +125,8 @@ void handleClient(const SOCKET client) {
                     task.running = task.ready = false;
                 }
 
-                uint8_t rsp = RSP_OK;
-                sendAll(client, &rsp, 1);
-            } else if (cmd == CMD_RUN) {
+                sendString(client, OK);
+            } else if (cmd == RUN) {
                 TaskInfo *taskPtr = nullptr;
 
                 {
@@ -190,20 +188,19 @@ void handleClient(const SOCKET client) {
                     taskPtr->running = false;
                 }).detach();
 
-                uint8_t rsp = RSP_OK;
-                sendAll(client, &rsp, 1);
-            } else if (cmd == CMD_CHECK) {
-                TaskInfo *task;
+                sendString(client, OK);
+            } else if (cmd == CHECK) {
+                TaskInfo *task = nullptr;
 
                 {
                     lock_guard lock(tasksMutex);
                     task = &tasks[client];
                 }
 
-                uint8_t rsp = task->running ? RSP_BUSY : RSP_DONE;
-                sendAll(client, &rsp, 1);
-            } else if (cmd == CMD_RESULT) {
-                TaskInfo *task;
+                task->running ? sendString(client, BUSY)
+                  : sendString(client, DONE);
+            } else if (cmd == RESULT) {
+                TaskInfo *task = nullptr;
 
                 {
                     lock_guard lock(tasksMutex);
@@ -211,14 +208,14 @@ void handleClient(const SOCKET client) {
                 }
 
                 if (!task->ready) {
-                    throw runtime_error("Not ready");
+                    sendString(client, ERR);
+                    continue;
                 }
 
-                uint8_t rsp = RSP_DONE;
-                sendAll(client, &rsp, 1);
+                sendString(client, DONE);
 
                 uint32_t dimensionNet = htonl(task->dimension);
-                sendAll(client, &dimensionNet, 4);
+                sendData(client, &dimensionNet, 4);
 
                 vector<int32_t> matrixNet(task->matrix.size());
 
@@ -226,13 +223,12 @@ void handleClient(const SOCKET client) {
                     matrixNet[i] = htonl(task->matrix[i]);
                 }
 
-                sendAll(client, matrixNet.data(), matrixNet.size() * sizeof(int32_t));
+                sendData(client, matrixNet.data(), matrixNet.size() * sizeof(int32_t));
             } else {
                 throw runtime_error("Unknown cmd");
             }
         } catch (const exception &ex) {
-            uint8_t rsp = RSP_ERR;
-            sendAll(client, &rsp, 1);
+            sendString(client, ERROR);
         }
     }
 
