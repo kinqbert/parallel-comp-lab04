@@ -103,7 +103,9 @@ int main() {
     const int THREADS = 2;
     const auto matrix = makeMatrix(N);
 
-    if (N <= 10) {
+    const bool isSmallMatrix = N <= 10;
+
+    if (isSmallMatrix) {
         printMatrix(matrix, N, "Original");
     }
 
@@ -192,7 +194,7 @@ int main() {
 
     auto expected = matrix;
 
-    if (N <= 10) {
+    if (isSmallMatrix) {
         mirrorHorizontally(expected, N);
         const bool ok = (mirrored == expected);
 
