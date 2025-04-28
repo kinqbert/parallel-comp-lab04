@@ -29,7 +29,7 @@ function makeRecvAll(socket) {
   let stash = Buffer.alloc(0);
 
   return function recvAll(len) {
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve) => {
       if (stash.length >= len) {
         const out = stash.slice(0, len);
         stash = stash.slice(len);
@@ -57,6 +57,7 @@ async function runClient() {
   client.on("connect", async () => {
     try {
       const header = Buffer.alloc(9);
+
       header.writeUInt8(CMD_INIT, 0);
       header.writeUInt32BE(THREAD_COUNT, 1);
       header.writeUInt32BE(N, 5);
