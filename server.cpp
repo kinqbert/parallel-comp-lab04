@@ -30,8 +30,8 @@ enum : uint8_t {
 
 
 LONG WINAPI CrashHandler(EXCEPTION_POINTERS *ExceptionInfo) {
-    std::cerr << "[CRASH] Unhandled exception occurred! Code: "
-            << std::hex << ExceptionInfo->ExceptionRecord->ExceptionCode << std::endl;
+    cerr << "[CRASH] Unhandled exception occurred! Code: "
+            << hex << ExceptionInfo->ExceptionRecord->ExceptionCode << endl;
 
     WSACleanup();
 
@@ -85,9 +85,9 @@ void handleClient(const SOCKET client) {
     {
         lock_guard lock(tasksMutex);
         tasks.erase(client);
-        tasks.emplace(std::piecewise_construct,
-                      std::forward_as_tuple(client),
-                      std::forward_as_tuple());
+        tasks.emplace(piecewise_construct,
+                      forward_as_tuple(client),
+                      forward_as_tuple());
     }
 
     while (true) {
