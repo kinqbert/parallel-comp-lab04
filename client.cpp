@@ -27,10 +27,10 @@ enum : uint8_t {
     RSP_DONE = 0x13
 };
 
-bool sendAll(SOCKET s, const void *buf, int len) {
+bool sendAll(SOCKET socket, const void *buf, int len) {
     auto p = static_cast<const char *>(buf);
     while (len) {
-        const int n = send(s, p, len, 0);
+        const int n = send(socket, p, len, 0);
         if (n <= 0) return false;
         p += n;
         len -= n;
@@ -38,10 +38,10 @@ bool sendAll(SOCKET s, const void *buf, int len) {
     return true;
 }
 
-bool recvAll(SOCKET s, void *buf, int len) {
+bool recvAll(SOCKET socket, void *buf, int len) {
     auto p = static_cast<char *>(buf);
     while (len) {
-        const int n = recv(s, p, len, 0);
+        const int n = recv(socket, p, len, 0);
         if (n <= 0) return false;
         p += n;
         len -= n;
@@ -111,26 +111,29 @@ int main() {
         return 1;
     }
 
-    const uint32_t N = 5;
-    const uint32_t THREADS = 4;
+    const int N = 100;
+    const int THREADS = 2;
     const auto matrix = makeMatrix(N);
 
-    if (N <= 5) {
+    if (N <= 10) {
         printMatrix(matrix, N, "Original");
     }
 
     const uint8_t cmdInit = CMD_INIT;
-    const uint32_t thr_net = htonl(THREADS);
-    const uint32_t N_net = htonl(N);
+    const int thr_net = htonl(THREADS);
+    const int N_net = htonl(N);
 
     sendAll(sock, &cmdInit, 1);
     sendAll(sock, &thr_net, 4);
     sendAll(sock, &N_net, 4);
 
+    cout << "[CLIENT] SENDING DATA\n";
+
     for (const int32_t v : matrix) {
         int32_t tmp = htonl(v);
         sendAll(sock, &tmp, 4);
     }
+
     uint8_t rsp;
     if (!recvAll(sock, &rsp, 1) || rsp != RSP_OK) {
         cerr << "INIT error\n";
@@ -156,11 +159,11 @@ int main() {
             return 1;
         }
         if (rspCheck == RSP_BUSY) {
-            cout << "  …working\n";
+            cout << "[CLIENT] Server still working...\n";
             continue;
         }
         if (rspCheck == RSP_DONE) {
-            cout << "[CLIENT] computation finished\n";
+            cout << "[CLIENT] Computation finished\n";
             break;
         }
         cerr << "Unexpected CHECK response\n";
@@ -197,16 +200,16 @@ int main() {
     }
 
     auto expected = matrix;
-    mirrorHorizontally(expected, N);
 
-    const bool ok = (mirrored == expected);
+    if (N <= 10) {
+        mirrorHorizontally(expected, N);
+        const bool ok = (mirrored == expected);
 
-    if (N <= 5) {
         printMatrix(expected, N, "Expected (mirrored locally)");
         printMatrix(mirrored, N, "Received from server");
-    }
 
-    cout << (ok ? "[CLIENT] Mirror OK" : "[CLIENT] Mirror mismatch") << endl;
+        cout << (ok ? "[CLIENT] Mirror OK" : "[CLIENT] Mirror mismatch") << endl;
+    }
 
     closesocket(sock);
     WSACleanup();

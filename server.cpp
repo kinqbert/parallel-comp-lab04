@@ -65,10 +65,10 @@ uint64_t hton64(const uint64_t x) {
     return (static_cast<uint64_t>(hi) << 32) | lo;
 }
 
-bool recvAll(SOCKET s, void *buf, int len) {
+bool recvAll(SOCKET socket, void *buf, int len) {
     auto p = static_cast<char *>(buf);
     while (len > 0) {
-        const int r = recv(s, p, len, 0);
+        const int r = recv(socket, p, len, 0);
         if (r <= 0) return false;
         p += r;
         len -= r;
@@ -76,10 +76,10 @@ bool recvAll(SOCKET s, void *buf, int len) {
     return true;
 }
 
-bool sendAll(SOCKET s, const void *buf, int len) {
+bool sendAll(SOCKET socket, const void *buf, int len) {
     auto p = static_cast<const char *>(buf);
     while (len > 0) {
-        const int r = send(s, p, len, 0);
+        const int r = send(socket, p, len, 0);
         if (r <= 0) return false;
         p += r;
         len -= r;
@@ -155,14 +155,20 @@ void handleClient(const SOCKET client) { {
                     const uint32_t chunk = rows / P;
                     const uint32_t extra = rows % P;
 
-                    auto work = [tPtr,N](uint32_t rBegin, uint32_t rEnd) {
+                    auto work = [tPtr, N](uint32_t rBegin, uint32_t rEnd)
+                    {
                         for (uint32_t i = rBegin; i < rEnd; ++i) {
-                            uint32_t mirror = N - 1 - i;
-                            int32_t *topRow = tPtr->mtx.data() + i * N;
-                            int32_t *botRow = tPtr->mtx.data() + mirror * N;
-                            memcpy(botRow, topRow, N * sizeof(int32_t));
+                            const uint32_t mirror = N - 1 - i;
+                            const int32_t* topRow = tPtr->mtx.data() + i * N;
+                            int32_t* botRow = tPtr->mtx.data() + mirror * N;
+
+                            for (uint32_t j = 0; j < N; ++j) {
+                                botRow[j] = topRow[j];
+                            }
                         }
                     };
+
+                    this_thread::sleep_for(chrono::milliseconds(2000));
 
                     vector<thread> pool;
                     uint32_t r0 = 0;
