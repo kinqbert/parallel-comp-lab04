@@ -49,18 +49,6 @@ bool recvAll(SOCKET socket, void *buf, int len) {
     return true;
 }
 
-uint64_t ntoh64(const uint64_t x) {
-    const uint32_t hi = ntohl(static_cast<uint32_t>(x >> 32));
-    const uint32_t lo = ntohl(static_cast<uint32_t>(x & 0xFFFFFFFF));
-    return (static_cast<uint64_t>(hi) << 32) | lo;
-}
-
-uint64_t hton64(const uint64_t x) {
-    const uint32_t hi = htonl(static_cast<uint32_t>(x >> 32));
-    const uint32_t lo = htonl(static_cast<uint32_t>(x & 0xFFFFFFFF));
-    return (static_cast<uint64_t>(hi) << 32) | lo;
-}
-
 vector<int32_t> makeMatrix(const uint32_t N, const int32_t lo = 1, const int32_t hi = 100) {
     vector<int32_t> m(N * N);
     random_device rd;
@@ -111,7 +99,7 @@ int main() {
         return 1;
     }
 
-    const int N = 100;
+    const int N = 1000;
     const int THREADS = 2;
     const auto matrix = makeMatrix(N);
 
@@ -129,10 +117,13 @@ int main() {
 
     cout << "[CLIENT] SENDING DATA\n";
 
-    for (const int32_t v : matrix) {
-        int32_t tmp = htonl(v);
-        sendAll(sock, &tmp, 4);
+    vector<int32_t> matrixNet(matrix.size());
+
+    for (size_t i = 0; i < matrix.size(); ++i) {
+        matrixNet[i] = htonl(matrix[i]);
     }
+
+    sendAll(sock, matrixNet.data(), matrixNet.size() * sizeof(int32_t));
 
     uint8_t rsp;
     if (!recvAll(sock, &rsp, 1) || rsp != RSP_OK) {
