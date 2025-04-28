@@ -39,8 +39,8 @@ LONG WINAPI CrashHandler(EXCEPTION_POINTERS *ExceptionInfo) {
 }
 
 struct TaskInfo {
-    uint32_t N = 0;
-    vector<int32_t> mtx;
+    uint32_t dimension = 0;
+    vector<int32_t> matrix;
     uint32_t threadCount = 0;
     atomic<bool> running{false};
     atomic<bool> ready{false};
@@ -61,35 +61,28 @@ const char *getCommandName(const uint8_t cmd) {
 
 bool recvAll(SOCKET socket, void *buf, int len) {
     auto p = static_cast<char *>(buf);
-    while (len > 0) {
-        const int r = recv(socket, p, len, 0);
-        if (r <= 0) return false;
-        p += r;
-        len -= r;
+    while (len) {
+        const int n = recv(socket, p, len, 0);
+        if (n <= 0) return false;
+        p += n;
+        len -= n;
     }
     return true;
 }
 
 bool sendAll(SOCKET socket, const void *buf, int len) {
     auto p = static_cast<const char *>(buf);
-    while (len > 0) {
-        const int r = send(socket, p, len, 0);
-        if (r <= 0) return false;
-        p += r;
-        len -= r;
+    while (len) {
+        const int n = send(socket, p, len, 0);
+        if (n <= 0) return false;
+        p += n;
+        len -= n;
     }
     return true;
 }
 
-void initWinSock() {
-    WSADATA ws;
-    if (WSAStartup(MAKEWORD(2, 2), &ws) != 0) {
-        cerr << "WSAStartup failed\n";
-        exit(1);
-    }
-}
-
-void handleClient(const SOCKET client) { {
+void handleClient(const SOCKET client) {
+    {
         lock_guard lock(tasksMutex);
         tasks.erase(client);
         tasks.emplace(std::piecewise_construct,
@@ -106,103 +99,128 @@ void handleClient(const SOCKET client) { {
                     << " from client " << client << endl;
 
             if (cmd == CMD_INIT) {
-                uint32_t thrN, dimN;
-                if (!recvAll(client, &thrN, 4) || !recvAll(client, &dimN, 4))
+                uint32_t threads, dimension;
+                if (!recvAll(client, &threads, 4) || !recvAll(client, &dimension, 4)) {
                     throw runtime_error("Bad INIT header");
-                thrN = ntohl(thrN);
-                dimN = ntohl(dimN);
-
-                vector<int32_t> buf(dimN * dimN);
-                if (!recvAll(client, buf.data(), buf.size() * 4))
-                    throw runtime_error("Bad INIT data");
-                for (auto &v: buf) v = ntohl(static_cast<uint32_t>(v)); {
-                    lock_guard g(tasksMutex);
-                    auto &t = tasks[client];
-                    t.N = dimN;
-                    t.mtx.swap(buf);
-                    t.threadCount = thrN;
-                    t.running = t.ready = false;
                 }
+
+                threads = ntohl(threads);
+                dimension = ntohl(dimension);
+
+                vector<int32_t> matrix(dimension * dimension);
+
+                if (!recvAll(client, matrix.data(), matrix.size() * 4)) {
+                    throw runtime_error("Bad INIT data");
+                }
+
+                for (auto &v: matrix) {
+                    v = ntohl(static_cast<uint32_t>(v));
+                }
+
+                {
+                    lock_guard g(tasksMutex);
+                    auto &task = tasks[client];
+                    task.dimension = dimension;
+                    task.matrix.swap(matrix);
+                    task.threadCount = threads;
+                    task.running = task.ready = false;
+                }
+
                 uint8_t rsp = RSP_OK;
                 sendAll(client, &rsp, 1);
             } else if (cmd == CMD_RUN) {
-                TaskInfo *tPtr = nullptr; {
+                TaskInfo *taskPtr = nullptr;
+
+                {
                     lock_guard lock(tasksMutex);
                     auto &t = tasks[client];
 
-                    if (t.mtx.empty() || t.threadCount == 0)
+                    if (t.matrix.empty() || t.threadCount == 0) {
                         throw runtime_error("No INIT");
+                    }
 
-                    if (t.running)
+                    if (t.running) {
                         throw runtime_error("Already RUN");
+                    }
 
                     t.running = true;
                     t.ready = false;
 
-                    tPtr = &t;
+                    taskPtr = &t;
                 }
 
-                thread([tPtr] {
-                    const uint32_t N = tPtr->N;
-                    const uint32_t P = tPtr->threadCount;
-                    const uint32_t rows = N / 2;
-                    const uint32_t chunk = rows / P;
-                    const uint32_t extra = rows % P;
+                thread([taskPtr] {
+                    const uint32_t dimension = taskPtr->dimension;
+                    const uint32_t threads = taskPtr->threadCount;
+                    const uint32_t rows = dimension / 2;
+                    const uint32_t chunk = rows / threads;
+                    const uint32_t extra = rows % threads;
 
-                    auto work = [tPtr, N](uint32_t rBegin, uint32_t rEnd)
+                    auto work = [taskPtr, dimension](const uint32_t rowStart, const uint32_t rowEnd)
                     {
-                        for (uint32_t i = rBegin; i < rEnd; ++i) {
-                            const uint32_t mirror = N - 1 - i;
-                            const int32_t* topRow = tPtr->mtx.data() + i * N;
-                            int32_t* botRow = tPtr->mtx.data() + mirror * N;
+                        for (uint32_t i = rowStart; i < rowEnd; ++i) {
+                            const int32_t mirrorRowIndex = dimension - 1 - i;
+                            const int32_t* topRow = taskPtr->matrix.data() + i * dimension;
+                            int32_t* bottomRow = taskPtr->matrix.data() + mirrorRowIndex * dimension;
 
-                            for (uint32_t j = 0; j < N; ++j) {
-                                botRow[j] = topRow[j];
+                            for (uint32_t j = 0; j < dimension; ++j) {
+                                bottomRow[j] = topRow[j];
                             }
                         }
                     };
 
-                    this_thread::sleep_for(chrono::milliseconds(2000));
-
                     vector<thread> pool;
-                    uint32_t r0 = 0;
-                    for (uint32_t p = 0; p < P; ++p) {
-                        uint32_t r1 = r0 + chunk + (p < extra ? 1 : 0);
-                        pool.emplace_back(work, r0, r1);
-                        r0 = r1;
+                    uint32_t row0 = 0;
+
+                    for (uint32_t p = 0; p < threads; ++p) {
+                        uint32_t row1 = row0 + chunk + (p < extra ? 1 : 0);
+                        pool.emplace_back(work, row0, row1);
+                        row0 = row1;
                     }
-                    for (auto &th: pool) th.join();
+
+                    for (auto &thread: pool) {
+                        thread.join();
+                    }
+
+                    this_thread::sleep_for(chrono::milliseconds(2000));
 
                     cout << "[SERVER] Processing finished." << endl;
 
-                    tPtr->ready = true;
-                    tPtr->running = false;
+                    taskPtr->ready = true;
+                    taskPtr->running = false;
                 }).detach();
 
                 uint8_t rsp = RSP_OK;
                 sendAll(client, &rsp, 1);
             } else if (cmd == CMD_CHECK) {
-                TaskInfo *t; {
+                TaskInfo *task;
+
+                {
                     lock_guard lock(tasksMutex);
-                    t = &tasks[client];
+                    task = &tasks[client];
                 }
-                uint8_t rsp = t->running ? RSP_BUSY : RSP_DONE;
+
+                uint8_t rsp = task->running ? RSP_BUSY : RSP_DONE;
                 sendAll(client, &rsp, 1);
             } else if (cmd == CMD_RESULT) {
-                TaskInfo *t; {
+                TaskInfo *task;
+
+                {
                     lock_guard lock(tasksMutex);
-                    t = &tasks[client];
+                    task = &tasks[client];
                 }
-                if (!t->ready)
+
+                if (!task->ready) {
                     throw runtime_error("Not ready");
+                }
 
                 uint8_t rsp = RSP_DONE;
                 sendAll(client, &rsp, 1);
 
-                uint32_t netN = htonl(t->N);
-                sendAll(client, &netN, 4);
+                uint32_t dimensionNet = htonl(task->dimension);
+                sendAll(client, &dimensionNet, 4);
 
-                for (const int32_t v: t->mtx) {
+                for (const int32_t v: task->matrix) {
                     int32_t tmp = htonl(v);
                     sendAll(client, &tmp, 4);
                 }
@@ -222,7 +240,12 @@ void handleClient(const SOCKET client) { {
 
 int main() {
     SetUnhandledExceptionFilter(CrashHandler);
-    initWinSock();
+
+    WSADATA ws;
+    if (WSAStartup(MAKEWORD(2, 2), &ws) != 0) {
+        cerr << "WSAStartup failed\n";
+        exit(1);
+    }
 
     SOCKET listener = socket(AF_INET, SOCK_STREAM, 0);
     if (listener == INVALID_SOCKET) {

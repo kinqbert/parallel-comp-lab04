@@ -70,7 +70,9 @@ void mirrorHorizontally(vector<int32_t> &m, const uint32_t N) {
 void printMatrix(const vector<int32_t> &m, uint32_t N, const string &title) {
     cout << title << " (" << N << "x" << N << "):\n";
     for (uint32_t i = 0; i < N; ++i) {
-        for (uint32_t j = 0; j < N; ++j) cout << setw(4) << m[i * N + j] << ' ';
+        for (uint32_t j = 0; j < N; ++j) {
+            cout << setw(4) << m[i * N + j] << ' ';
+        }
         cout << '\n';
     }
 }
@@ -83,7 +85,8 @@ int main() {
     }
     SOCKET sock = socket(AF_INET,SOCK_STREAM, 0);
     if (sock == INVALID_SOCKET) {
-        cerr << "socket() error\n";
+        cerr << "socket() failed: " << WSAGetLastError() << "\n";
+        WSACleanup();
         return 1;
     }
 
@@ -99,25 +102,25 @@ int main() {
         return 1;
     }
 
-    const int N = 1000;
+    const int dimension = 10;
     const int THREADS = 2;
-    const auto matrix = makeMatrix(N);
+    const auto matrix = makeMatrix(dimension);
 
-    const bool isSmallMatrix = N <= 10;
+    const bool isSmallMatrix = dimension <= 10;
 
     if (isSmallMatrix) {
-        printMatrix(matrix, N, "Original");
+        printMatrix(matrix, dimension, "Original");
     }
 
     const uint8_t cmdInit = CMD_INIT;
-    const int thr_net = htonl(THREADS);
-    const int N_net = htonl(N);
-
-    sendAll(sock, &cmdInit, 1);
-    sendAll(sock, &thr_net, 4);
-    sendAll(sock, &N_net, 4);
+    const int threadsNet = htonl(THREADS);
+    const int dimensionNet = htonl(dimension);
 
     cout << "[CLIENT] SENDING DATA\n";
+
+    sendAll(sock, &cmdInit, 1);
+    sendAll(sock, &threadsNet, 4);
+    sendAll(sock, &dimensionNet, 4);
 
     vector<int32_t> matrixNet(matrix.size());
 
@@ -179,12 +182,12 @@ int main() {
     recvAll(sock, &outN, 4);
     outN = ntohl(outN);
 
-    if (outN != N) {
+    if (outN != dimension) {
         cerr << "Server sent matrix of different size\n";
         return 1;
     }
 
-    mirrored.resize(N * N);
+    mirrored.resize(dimension * dimension);
 
     for (auto &v : mirrored) {
         int32_t tmp;
@@ -195,11 +198,11 @@ int main() {
     auto expected = matrix;
 
     if (isSmallMatrix) {
-        mirrorHorizontally(expected, N);
+        mirrorHorizontally(expected, dimension);
         const bool ok = (mirrored == expected);
 
-        printMatrix(expected, N, "Expected (mirrored locally)");
-        printMatrix(mirrored, N, "Received from server");
+        printMatrix(expected, dimension, "Expected (mirrored locally)");
+        printMatrix(mirrored, dimension, "Received from server");
 
         cout << (ok ? "[CLIENT] Mirror OK" : "[CLIENT] Mirror mismatch") << endl;
     }
